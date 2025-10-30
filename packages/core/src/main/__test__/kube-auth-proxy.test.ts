@@ -108,6 +108,12 @@ describe("kube auth proxy tests", () => {
     kubeAuthProxy.exit();
   });
 
+  it("calling resetRetryCount multiple times shouldn't throw", async () => {
+    kubeAuthProxy.resetRetryCount();
+    kubeAuthProxy.resetRetryCount();
+    kubeAuthProxy.resetRetryCount();
+  });
+
   describe("spawn tests", () => {
     let mockedCP: DeepMockProxy<ChildProcess>;
     let listeners: EventEmitter;
