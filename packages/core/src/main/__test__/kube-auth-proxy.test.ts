@@ -268,4 +268,14 @@ describe("kube auth proxy tests", () => {
       });
     });
   });
+
+  describe("retry functionality", () => {
+    it("should have resetRetryCount method", () => {
+      expect(typeof kubeAuthProxy.resetRetryCount).toBe("function");
+    });
+
+    it("calling resetRetryCount should not throw", () => {
+      expect(() => kubeAuthProxy.resetRetryCount()).not.toThrow();
+    });
+  });
 });
