@@ -27,6 +27,7 @@ export interface KubeAuthProxy {
   readonly port: number;
   run: () => Promise<void>;
   exit: () => void;
+  resetRetryCount: () => void;
 }
 
 export type CreateKubeAuthProxy = (env: NodeJS.ProcessEnv) => KubeAuthProxy;
@@ -35,6 +36,11 @@ const startingServeMatcher = "starting to serve on (?<address>.+)";
 const startingServeRegex = Object.assign(TypedRegEx(startingServeMatcher, "i"), {
   rawMatcher: startingServeMatcher,
 });
+
+// Configuration for retry logic
+const MAX_RETRY_ATTEMPTS = 3;
+const INITIAL_RETRY_DELAY_MS = 1000; // 1 second
+const MAX_RETRY_DELAY_MS = 30000; // 30 seconds
 
 const createKubeAuthProxyInjectable = getInjectable({
   id: "create-kube-auth-proxy",
@@ -55,6 +61,7 @@ const createKubeAuthProxyInjectable = getInjectable({
       let proxyProcess: ChildProcess | undefined;
       const ready = observable.box(false);
       const apiPrefix = `/${randomBytes(8).toString("hex")}`;
+      let retryCount = 0;
 
       const exit = () => {
         ready.set(false);
@@ -67,6 +74,30 @@ const createKubeAuthProxyInjectable = getInjectable({
           proxyProcess.kill();
           proxyProcess = undefined;
         }
+      };
+
+      const resetRetryCount = () => {
+        retryCount = 0;
+        logger.debug("[KUBE-AUTH-PROXY]: retry count reset", cluster.getMeta());
+      };
+
+      const calculateRetryDelay = (): number => {
+        // Exponential backoff: delay = min(INITIAL_DELAY * 2^retryCount, MAX_DELAY)
+        const delay = Math.min(INITIAL_RETRY_DELAY_MS * Math.pow(2, retryCount), MAX_RETRY_DELAY_MS);
+        return delay;
+      };
+
+      const shouldRetry = (): boolean => {
+        return retryCount < MAX_RETRY_ATTEMPTS;
+      };
+
+      const waitBeforeRetry = async (): Promise<void> => {
+        const delay = calculateRetryDelay();
+        logger.info(
+          `[KUBE-AUTH-PROXY]: waiting ${delay}ms before retry attempt ${retryCount + 1}/${MAX_RETRY_ATTEMPTS}`,
+          cluster.getMeta(),
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
       };
 
       const run = async (): Promise<void> => {
@@ -151,15 +182,28 @@ const createKubeAuthProxyInjectable = getInjectable({
                 message: "Authentication proxy started",
               }),
           });
+          // Reset retry count on successful start
+          resetRetryCount();
         } catch (error) {
           logger.warn("[KUBE-AUTH-PROXY]: getPortFromStream failed", error);
-          broadcastConnectionUpdate({
-            level: "error",
-            message: "Proxy port can't be found, restarting...",
-          });
           exit();
 
-          return run();
+          if (shouldRetry()) {
+            retryCount++;
+            broadcastConnectionUpdate({
+              level: "error",
+              message: `Proxy port can't be found, retrying (${retryCount}/${MAX_RETRY_ATTEMPTS})...`,
+            });
+            await waitBeforeRetry();
+            return run();
+          } else {
+            broadcastConnectionUpdate({
+              level: "error",
+              message:
+                "Proxy failed to start after maximum retry attempts. Please check your authentication and try reconnecting.",
+            });
+            throw new Error("Proxy startup failed after maximum retry attempts");
+          }
         }
 
         logger.info(`[KUBE-AUTH-PROXY]: found port=${port}`);
@@ -167,15 +211,28 @@ const createKubeAuthProxyInjectable = getInjectable({
         try {
           await waitUntilPortIsUsed(port, 500, 10000);
           ready.set(true);
+          // Reset retry count on successful connection
+          resetRetryCount();
         } catch (error) {
           logger.warn("[KUBE-AUTH-PROXY]: waitUntilUsed failed", error);
-          broadcastConnectionUpdate({
-            level: "error",
-            message: "Proxy port failed to be used within time limit, restarting...",
-          });
           exit();
 
-          return run();
+          if (shouldRetry()) {
+            retryCount++;
+            broadcastConnectionUpdate({
+              level: "error",
+              message: `Proxy port failed to be used within time limit, retrying (${retryCount}/${MAX_RETRY_ATTEMPTS})...`,
+            });
+            await waitBeforeRetry();
+            return run();
+          } else {
+            broadcastConnectionUpdate({
+              level: "error",
+              message:
+                "Proxy failed to connect after maximum retry attempts. Please check your authentication and try reconnecting.",
+            });
+            throw new Error("Proxy connection failed after maximum retry attempts");
+          }
         }
       };
 
@@ -183,6 +240,7 @@ const createKubeAuthProxyInjectable = getInjectable({
         apiPrefix,
         exit,
         run,
+        resetRetryCount,
         get port() {
           assert(port, "port has not yet been initialized");
 

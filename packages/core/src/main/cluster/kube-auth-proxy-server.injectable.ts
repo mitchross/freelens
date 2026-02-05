@@ -98,7 +98,9 @@ const kubeAuthProxyServerInjectable = getInjectable({
       },
       restart: async () => {
         stopServer();
-        await ensureServerHelper();
+        // Reset retry count on manual restart to give fresh attempts
+        const proxy = await ensureServerHelper();
+        proxy.resetRetryCount();
       },
       stop: stopServer,
     };

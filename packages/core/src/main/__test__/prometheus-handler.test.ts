@@ -56,6 +56,7 @@ describe("PrometheusHandler", () => {
       apiPrefix: "/some-api-prefix",
       exit: () => {},
       run: async () => {},
+      resetRetryCount: () => {},
       port: 9191,
     }));
     di.override(directoryForTempInjectable, () => "/some-temp-dir");

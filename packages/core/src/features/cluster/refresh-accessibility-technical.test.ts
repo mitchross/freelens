@@ -64,6 +64,7 @@ describe("Refresh Cluster Accessibility Technical Tests", () => {
       port: 0,
       exit: jest.fn(),
       run: asyncFn(),
+      resetRetryCount: jest.fn(),
     };
     mainDi.override(createKubeAuthProxyInjectable, () => () => kubeAuthProxyMock);
 
